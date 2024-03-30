@@ -204,6 +204,7 @@ def validate(args):
     elif args.input_size is not None:
         in_chans = args.input_size[0]
 
+    print("args.model:", args.model, "args.pretrained:", args.pretrained, "args.num_classes:", args.num_classes, "in_chans:", in_chans, "args.gp:", args.gp, "args.torchscript:", args.torchscript, "args.model_kwargs:", args.model_kwargs, "args.reparam:", args.reparam, "args.test_pool:", args.test_pool, "args.channels_last:", args.channels_last, "args.torchscript:", args.torchscript, "args.torchcompile:", args.torchcompile, "args.aot_autograd:", args.aot_autograd)
     model = create_model(
         args.model,
         pretrained=args.pretrained,
@@ -264,6 +265,8 @@ def validate(args):
         input_img_mode = 'RGB' if data_config['input_size'][0] == 3 else 'L'
     else:
         input_img_mode = args.input_img_mode
+
+    print("root_dir:", root_dir, "args.dataset:", args.dataset, "args.split:", args.split, "args.dataset_download:", args.dataset_download, "args.tf_preprocessing:", args.tf_preprocessing, "args.class_map:", args.class_map, "args.num_samples:", args.num_samples, "args.input_key:", args.input_key, "input_img_mode:", input_img_mode, "args.target_key:", args.target_key)
     dataset = create_dataset(
         root=root_dir,
         name=args.dataset,
@@ -277,18 +280,21 @@ def validate(args):
         target_key=args.target_key,
     )
 
+    print("args.valid_labels:", args.valid_labels)
     if args.valid_labels:
         with open(args.valid_labels, 'r') as f:
             valid_labels = [int(line.rstrip()) for line in f]
     else:
         valid_labels = None
 
+    print("args.real_labels:", args.real_labels)
     if args.real_labels:
         real_labels = RealLabelsImagenet(dataset.filenames(basename=True), real_json=args.real_labels)
     else:
         real_labels = None
 
     crop_pct = 1.0 if test_time_pool else data_config['crop_pct']
+    print("data_config['input_size']:", data_config['input_size'], "args.batch_size:", args.batch_size, "args.prefetcher:", args.prefetcher, "data_config['interpolation']:", data_config['interpolation'], "data_config['mean']:", data_config['mean'], "data_config['std']:", data_config['std'], "args.workers:", args.workers, "crop_pct:", crop_pct, "data_config['crop_mode']:", data_config['crop_mode'], "args.crop_border_pixels:", args.crop_border_pixels, "args.pin_mem:", args.pin_mem, "device:", device, "args.tf_preprocessing:", args.tf_preprocessing)
     loader = create_loader(
         dataset,
         input_size=data_config['input_size'],
