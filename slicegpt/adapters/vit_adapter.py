@@ -12,21 +12,17 @@ from timm.models.vision_transformer import Block
 
 class CompressedBlock(Block):
     def forward(self, x):
-        # TODO: implement orthogonal transformations
-        # if self.attn_shortcut_Q is not None:
-        #     rotated_residual = matmul(residual, self.attn_shortcut_Q)
-        #     hidden_states = rotated_residual + hidden_states
-        # else:
-        #     hidden_states = residual + hidden_states
+        # Self Attention
+        residual = x
+        if self.attn_shortcut_Q is not None:
+            residual = matmul(residual, self.attn_shortcut_Q)
+        x = residual + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
 
-        # if self.mlp_shortcut_Q is not None:
-        #     rotated_residual = matmul(residual, self.mlp_shortcut_Q)
-        #     hidden_states = rotated_residual + hidden_states
-        # else:
-        #     hidden_states = residual + hidden_states
-
-        x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
-        x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
+        # Fully Connected
+        residual = x
+        if self.mlp_shortcut_Q is not None:
+            residual = matmul(residual, self.mlp_shortcut_Q)
+        x = residual + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
 
         return x
 
@@ -102,7 +98,7 @@ class VitModelAdapter(ModelAdapter):
 
     @property
     def original_layer_type(self) -> type:
-        raise NotImplementedError
+        return Block
 
     @property
     def original_layer_norm_type(self) -> type:
@@ -114,7 +110,7 @@ class VitModelAdapter(ModelAdapter):
 
     @property
     def compressed_layer_type(self) -> type:
-        raise NotImplementedError
+        return CompressedBlock
 
     @property
     def use_cache(self) -> bool:
@@ -128,7 +124,14 @@ class VitModelAdapter(ModelAdapter):
         raise NotImplementedError
 
     def convert_layer_to_compressed(self, layer: Module, layer_idx: int | None) -> Module:
-        raise NotImplementedError
+        param = next(layer.parameters())
+        compressed_layer = self.compressed_layer_type(
+            self.hidden_size,
+            layer.attn.num_heads,
+            qkv_bias = layer.attn.qkv.bias is not None
+        ).to(device=param.device, dtype=param.dtype)
+        compressed_layer.load_state_dict(layer.state_dict(), strict=True)
+        return compressed_layer
 
     def get_layers(self) -> list[LayerAdapter]:
         return [self.layer_adapter_type(layer) for layer in self.model.blocks]

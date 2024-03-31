@@ -325,6 +325,7 @@ def validate(args):
     # simplify model using SliceGPT method
     print("slicing model")
     model_adapter = VitModelAdapter(model)
+    layernorm_fusion.replace_layers(model_adapter)
     layernorm_fusion.fuse_modules(model_adapter)
 
     with torch.no_grad():

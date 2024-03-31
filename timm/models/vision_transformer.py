@@ -137,6 +137,7 @@ class Block(nn.Module):
             mlp_layer: nn.Module = Mlp,
     ) -> None:
         super().__init__()
+        # print("dim:", dim, "num_heads:", num_heads, "mlp_ratio:", mlp_ratio, "qkv_bias:", qkv_bias, "qk_norm:", qk_norm, "proj_drop:", proj_drop, "attn_drop:", attn_drop, "init_values:", init_values, "drop_path:", drop_path, "act_layer:", act_layer, "norm_layer:", norm_layer, "mlp_layer:", mlp_layer)
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
             dim,
