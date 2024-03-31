@@ -5,7 +5,7 @@ import logging
 from typing import Callable, Iterable, Optional, TypeVar
 
 import torch
-from torch.nn import Linear, Module, Parameter
+from torch.nn import Linear, Module, Parameter, Embedding
 
 from .model_adapter import ModelAdapter
 from .modules import RMSN
@@ -86,8 +86,16 @@ def fuse_modules(model_adapter: ModelAdapter) -> None:
 
     # We add the mean subtraction to the first embeddings
     for W in model_adapter.get_embeddings():
-        W_ = W.weight.data.double()
-        W.weight.data = (W_ - W_.mean(dim=-1, keepdim=True)).to(W.weight.data.dtype)
+        if isinstance(W, Embedding):
+            # nn.Embedding
+            W_ = W.weight.data.double()
+            W.weight.data = (W_ - W_.mean(dim=-1, keepdim=True)).to(W.weight.data.dtype)
+        elif isinstance(W, Parameter):
+            # nn.Parameter
+            W_ = W.data.double()
+            W.data = (W_ - W_.mean(dim=-1, keepdim=True)).to(W.dtype)
+        else:
+            raise NotImplementedError
 
     layers = model_adapter.get_layers()
 

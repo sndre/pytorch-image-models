@@ -28,6 +28,9 @@ from timm.models import create_model, load_checkpoint, is_model, list_models
 from timm.utils import accuracy, AverageMeter, natural_key, setup_default_logging, set_jit_fuser, \
     decay_batch_step, check_batch_size_retry, ParseKwargs, reparameterize_model
 
+import slicegpt.layernorm_fusion as layernorm_fusion
+from slicegpt.adapters.vit_adapter import VitModelAdapter
+
 try:
     from apex import amp
     has_apex = True
@@ -318,6 +321,12 @@ def validate(args):
     top5 = AverageMeter()
 
     model.eval()
+
+    # simplify model using SliceGPT method
+    print("slicing model")
+    model_adapter = VitModelAdapter(model)
+    layernorm_fusion.fuse_modules(model_adapter)
+
     with torch.no_grad():
         # warmup, reduce variability of first batch time, especially for comparing torchscript vs non
         input = torch.randn((args.batch_size,) + tuple(data_config['input_size'])).to(device)
