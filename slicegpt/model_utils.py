@@ -26,7 +26,12 @@ def get_layer0_inputs(model_adapter: ModelAdapter, batch: Tensor) -> tuple[Tenso
     """
     # Move embeddings to device.
     for W in model_adapter.get_embeddings():
-        W.weight = torch.nn.Parameter(W.weight.to(config.device))
+        if isinstance(W, torch.nn.Embedding):
+            W.weight = torch.nn.Parameter(W.weight.to(config.device))
+        elif isinstance(W, torch.nn.Parameter):
+            W.data = W.data.to(config.device)
+        else:
+            raise NotImplementedError
 
     class Catcher(torch.nn.Module):
         def __init__(self):
@@ -60,7 +65,12 @@ def get_layer0_inputs(model_adapter: ModelAdapter, batch: Tensor) -> tuple[Tenso
 
     # Move embeddings back to cpu, and clear GPU cache.
     for W in model_adapter.get_embeddings():
-        W.weight = torch.nn.Parameter(W.weight.to('cpu'))
+        if isinstance(W, torch.nn.Embedding):
+            W.weight = torch.nn.Parameter(W.weight.to('cpu'))
+        elif isinstance(W, torch.nn.Parameter):
+            W.data = W.data.to('cpu')
+        else:
+            raise NotImplementedError
 
     # Run GC and cleanup GPU memory
     utils.cleanup_memory()

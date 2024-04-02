@@ -91,9 +91,16 @@ def slice_mlp_output(layer_adapter: LayerAdapter, new_embedding_dimension: int) 
 def rotate_embeddings(model_adapter: ModelAdapter, Q: torch.Tensor) -> None:
     # Rotate the embeddings.
     for W in model_adapter.get_embeddings():
-        dtype = W.weight.data.dtype
-        W_ = W.weight.data.to(device=config.device, dtype=torch.float64)
-        W.weight.data = torch.matmul(W_, Q).to(device="cpu", dtype=dtype)
+        if isinstance(W, torch.nn.Embedding):
+            dtype = W.weight.data.dtype
+            W_ = W.weight.data.to(device=config.device, dtype=torch.float64)
+            W.weight.data = torch.matmul(W_, Q).to(device="cpu", dtype=dtype)
+        elif isinstance(W, torch.nn.Parameter):
+            dtype = W.data.dtype
+            W_ = W.data.to(device=config.device, dtype=torch.float64)
+            W.data = torch.matmul(W_, Q).to(device="cpu", dtype=dtype)
+        else:
+            raise NotImplementedError
 
     # Run GC and cleanup GPU memory
     cleanup_memory()
@@ -102,7 +109,12 @@ def rotate_embeddings(model_adapter: ModelAdapter, Q: torch.Tensor) -> None:
 def slice_embeddings(model_adapter: ModelAdapter, new_embedding_dimensions: dict[int, int]) -> None:
     # Slice the embeddings.
     for i, W in enumerate(model_adapter.get_embeddings()):
-        W.weight.data = W.weight.data[:, : new_embedding_dimensions[i]]
+        if isinstance(W, torch.nn.Embedding):
+            W.weight.data = W.weight.data[:, : new_embedding_dimensions[i]]
+        elif isinstance(W, torch.nn.Parameter):
+            W.data = W.data[:, : new_embedding_dimensions[i]]
+        else:
+            raise NotImplementedError
 
 
 def rotate_head(model_adapter: ModelAdapter, Q: torch.Tensor) -> None:

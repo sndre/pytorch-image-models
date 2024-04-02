@@ -38,11 +38,11 @@ class VitLayerAdapter(LayerAdapter):
 
     @property
     def hidden_states_args_position(self) -> int:
-        raise NotImplementedError
+        return 0
 
     @property
     def hidden_states_output_position(self) -> int:
-        raise NotImplementedError
+        return 0
 
     def get_first_layernorm(self) -> Module:
         return self.layer.norm1
@@ -137,10 +137,10 @@ class VitModelAdapter(ModelAdapter):
         return [self.layer_adapter_type(layer) for layer in self.model.blocks]
 
     def get_raw_layer_at(self, index: int) -> Module:
-        raise NotImplementedError
+        return self.model.blocks[index]
 
     def set_raw_layer_at(self, index: int, new_layer: Module) -> None:
-        raise NotImplementedError
+        self.model.blocks[index] = new_layer
 
     def get_embeddings(self) -> list[Module]:
         return [self.model.cls_token]
