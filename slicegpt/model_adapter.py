@@ -264,6 +264,20 @@ class ModelAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_patch_embeddings(self) -> Module:
+        """
+        Returns a patch embeddings module in the model. Applicable to vision transformers only.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_patch_embeddings(self, new_layer: Module) -> None:
+        """
+        Sets a patch embeddings module in the model. Applicable to vision transformers only.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def get_pre_head_layernorm(self) -> Module:
         """
         Returns the layer norm (or equivalent) before the head of the model.

@@ -84,11 +84,20 @@ class PatchEmbed(nn.Module):
             pad_h = (self.patch_size[0] - H % self.patch_size[0]) % self.patch_size[0]
             pad_w = (self.patch_size[1] - W % self.patch_size[1]) % self.patch_size[1]
             x = F.pad(x, (0, pad_w, 0, pad_h))
-        x = self.proj(x)
-        if self.flatten:
-            x = x.flatten(2).transpose(1, 2)  # NCHW -> NLC
-        elif self.output_fmt != Format.NCHW:
-            x = nchw_to(x, self.output_fmt)
+        if isinstance(self.proj, nn.Conv2d):
+            x = self.proj(x)
+            if self.flatten:
+                x = x.flatten(2).transpose(1, 2)  # NCHW -> NLC
+            elif self.output_fmt != Format.NCHW:
+                x = nchw_to(x, self.output_fmt)
+        elif isinstance(self.proj, nn.Linear):
+            x = F.unfold(
+                x, 
+                kernel_size=self.patch_size, 
+                stride=self.patch_size
+            )  # Unfold patches
+            x = x.transpose(1, 2)  # Change shape to NLC
+            x = self.proj(x)  # Apply Linear layer
         x = self.norm(x)
         return x
 

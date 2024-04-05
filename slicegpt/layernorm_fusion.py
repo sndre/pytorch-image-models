@@ -1,11 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import math
 import logging
 from typing import Callable, Iterable, Optional, TypeVar
 
 import torch
-from torch.nn import Linear, Module, Parameter, Embedding
+from torch.nn import Linear, Module, Parameter, Embedding, Conv2d
 
 from .model_adapter import ModelAdapter
 from .modules import RMSN
@@ -96,6 +97,15 @@ def fuse_modules(model_adapter: ModelAdapter) -> None:
             W.data = (W_ - W_.mean(dim=-1, keepdim=True)).to(W.dtype)
         else:
             raise NotImplementedError
+        
+    # convert conv2d patch embeddings layer to liner layer
+    patch_embed = model_adapter.get_patch_embeddings()
+    if isinstance(patch_embed, Conv2d):
+        in_features = patch_embed.in_channels * math.prod(patch_embed.kernel_size)
+        linear_patch_embed = Linear(in_features=in_features, out_features=patch_embed.out_channels)
+        linear_patch_embed.weight.data = patch_embed.weight.view(patch_embed.out_channels, -1).data
+        linear_patch_embed.bias.data = patch_embed.bias.data
+        model_adapter.set_patch_embeddings(linear_patch_embed)
 
     layers = model_adapter.get_layers()
 

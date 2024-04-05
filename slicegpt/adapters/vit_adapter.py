@@ -145,6 +145,18 @@ class VitModelAdapter(ModelAdapter):
     def get_embeddings(self) -> list[Module]:
         return [self.model.cls_token]
 
+    def get_patch_embeddings(self) -> Module:
+        """
+        Returns a patch embeddings module in the model. Applicable to vision transformers only.
+        """
+        return self.model.patch_embed.proj
+
+    def set_patch_embeddings(self, new_layer: Module) -> None:
+        """
+        Sets a patch embeddings module in the model. Applicable to vision transformers only.
+        """
+        self.model.patch_embed.proj = new_layer
+
     def get_pre_head_layernorm(self) -> type:
         return self.model.norm
 
