@@ -15,6 +15,27 @@ from .slicing_scheduler import ConfigSlicingScheduler, ConstSlicingScheduler, Sl
 from .utils import cleanup_memory, map_tensors
 
 
+def rotate_patch_embeddings(model_adapter: ModelAdapter, Q: torch.Tensor) -> None:
+    # Rotate matrix of the patch embedding layer.
+    W = model_adapter.get_patch_embeddings()
+
+    dtype = W.weight.data.dtype
+    W_ = W.weight.data.to(device=config.device, dtype=torch.float64)
+    W.weight.data = torch.matmul(Q.T, W_).to(device="cpu", dtype=dtype)
+    if W.bias is not None:
+        b = W.bias.data.to(device=config.device, dtype=torch.float64)
+        W.bias.data = torch.matmul(Q.T, b).to(device="cpu", dtype=dtype)
+
+
+def slice_patch_embeddings(model_adapter: ModelAdapter, new_embedding_dimension: int) -> None:
+    # Slice matrix of the patch embedding layer.
+    W = model_adapter.get_patch_embeddings()
+    W.weight.data = W.weight.data[:new_embedding_dimension, :]
+    if W.bias is not None:
+        W.bias.data = W.bias.data[:new_embedding_dimension]
+    W.out_features = new_embedding_dimension
+
+
 def rotate_attention_inputs(layer_adapter: LayerAdapter, Q: torch.Tensor) -> None:
     # Rotate the WQ, WK and WV matrices of the self-attention layer.
     for W in layer_adapter.get_attention_inputs():
@@ -112,7 +133,7 @@ def slice_embeddings(model_adapter: ModelAdapter, new_embedding_dimensions: dict
         if isinstance(W, torch.nn.Embedding):
             W.weight.data = W.weight.data[:, : new_embedding_dimensions[i]]
         elif isinstance(W, torch.nn.Parameter):
-            W.data = W.data[:, : new_embedding_dimensions[i]]
+            W.data = W.data[:, :, :new_embedding_dimensions[i]]
         else:
             raise NotImplementedError
 
@@ -164,6 +185,7 @@ def rotate_and_slice_sequential(
     model_adapter.model.eval()
     dtype = next(iter(model_adapter.model.parameters())).dtype
 
+    logging.info("Load layer 0 inputs")
     inps, args, kwargs, ignore_masks = [], [], [], []
     for batch in dataloader:
         inp_batch, args_batch, kwargs_batch = get_layer0_inputs(model_adapter, batch)
@@ -184,6 +206,10 @@ def rotate_and_slice_sequential(
         Q = Q @ R.to(Q.device)
     rotate_embeddings(model_adapter, Q)
     slice_embeddings(model_adapter, slicing_scheduler.get_embedding_dimensions())
+
+    # rotate and slice patch embeddings
+    rotate_patch_embeddings(model_adapter, Q)
+    slice_patch_embeddings(model_adapter, slicing_scheduler.dimension)
 
     logging.info("Rotate and slice layers")
     for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Rotating and slicing")):

@@ -143,7 +143,7 @@ class VitModelAdapter(ModelAdapter):
         self.model.blocks[index] = new_layer
 
     def get_embeddings(self) -> list[Module]:
-        return [self.model.cls_token]
+        return [self.model.cls_token, self.model.pos_embed]
 
     def get_patch_embeddings(self) -> Module:
         """

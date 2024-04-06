@@ -17,6 +17,7 @@ import time
 from collections import OrderedDict
 from contextlib import suppress
 from functools import partial
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -29,7 +30,9 @@ from timm.utils import accuracy, AverageMeter, natural_key, setup_default_loggin
     decay_batch_step, check_batch_size_retry, ParseKwargs, reparameterize_model
 
 import slicegpt.layernorm_fusion as layernorm_fusion
+import slicegpt.rotate as rotate
 from slicegpt.adapters.vit_adapter import VitModelAdapter
+from slicegpt.slicing_scheduler import ConstSlicingScheduler
 
 try:
     from apex import amp
@@ -327,6 +330,25 @@ def validate(args):
     model_adapter = VitModelAdapter(model)
     layernorm_fusion.replace_layers(model_adapter)
     layernorm_fusion.fuse_modules(model_adapter)
+
+    sparsity, round_interval = 0.0, 8
+    # compute new embedding dimension given the desired sparsity level
+    new_embedding_dimension = int((1 - sparsity) * model_adapter.hidden_size)
+    # round (down) to the nearest multiple of round_interval
+    new_embedding_dimension -= new_embedding_dimension % round_interval
+    scheduler = ConstSlicingScheduler(new_embedding_dimension)
+
+    def batch_loader(loader):
+        for _, (input, _) in enumerate(tqdm(loader)):
+            yield {"x": input}
+            # TODO: remove break to compute PCA based on the entire validation dataset
+            break
+
+    rotate.rotate_and_slice(model_adapter, batch_loader(loader), scheduler, apply_mask=False, final_orientation="random")
+    model = model.to(device)
+
+    param_count = sum([m.numel() for m in model.parameters()])
+    _logger.info('Model %s sliced, param count: %d' % (args.model, param_count))
 
     with torch.no_grad():
         # warmup, reduce variability of first batch time, especially for comparing torchscript vs non
