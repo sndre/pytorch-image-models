@@ -105,6 +105,7 @@ def fuse_modules(model_adapter: ModelAdapter) -> None:
         linear_patch_embed = Linear(in_features=in_features, out_features=patch_embed.out_channels)
         linear_patch_embed.weight.data = patch_embed.weight.view(patch_embed.out_channels, -1).data
         linear_patch_embed.bias.data = patch_embed.bias.data
+        # bake_mean_into_linear(linear_patch_embed) # TODO: this seems like the right thing to do however it doesn't lead to perf improvement
         model_adapter.set_patch_embeddings(linear_patch_embed)
 
     layers = model_adapter.get_layers()

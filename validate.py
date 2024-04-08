@@ -331,7 +331,7 @@ def validate(args):
     layernorm_fusion.replace_layers(model_adapter)
     layernorm_fusion.fuse_modules(model_adapter)
 
-    sparsity, round_interval = 0.0, 8
+    sparsity, round_interval = 0.25, 8
     # compute new embedding dimension given the desired sparsity level
     new_embedding_dimension = int((1 - sparsity) * model_adapter.hidden_size)
     # round (down) to the nearest multiple of round_interval
@@ -339,10 +339,11 @@ def validate(args):
     scheduler = ConstSlicingScheduler(new_embedding_dimension)
 
     def batch_loader(loader):
-        for _, (input, _) in enumerate(tqdm(loader)):
+        max_batches = 1
+        for i, (input, _) in enumerate(tqdm(loader)):
+            if i >= max_batches:
+                break
             yield {"x": input}
-            # TODO: remove break to compute PCA based on the entire validation dataset
-            break
 
     rotate.rotate_and_slice(model_adapter, batch_loader(loader), scheduler, apply_mask=False, final_orientation="random")
     model = model.to(device)
