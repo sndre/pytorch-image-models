@@ -32,18 +32,6 @@ def test_pca_equality():
         torch.manual_seed(42)
         yield {"x": torch.randn((1, 3, 224, 224))}
 
-    # model to slice using original PCA computation
-    original_model = timm.create_model('vit_base_patch16_224.orig_in21k_ft_in1k', pretrained=True).to(device).eval()
-    original_model_adapter = VitModelAdapter(original_model)
-    layernorm_fusion.replace_layers(original_model_adapter)
-    layernorm_fusion.fuse_modules(original_model_adapter)
-    sparsity, round_interval = 0.25, 8
-    new_embedding_dimension = int((1 - sparsity) * original_model_adapter.hidden_size)
-    new_embedding_dimension -= new_embedding_dimension % round_interval
-    scheduler = ConstSlicingScheduler(new_embedding_dimension)
-    rotate.rotate_and_slice_sequential(original_model_adapter, batch_loader(), scheduler, apply_mask=False, final_orientation="pca")
-    original_model = original_model.to(device)
-
     # model to slice using optimized PCA computation
     optimized_model = timm.create_model('vit_base_patch16_224.orig_in21k_ft_in1k', pretrained=True).to(device).eval()
     optimized_model_adapter = VitModelAdapter(optimized_model)
@@ -55,6 +43,18 @@ def test_pca_equality():
     scheduler = ConstSlicingScheduler(new_embedding_dimension)
     rotate.optimized_rotate_and_slice_sequential(optimized_model_adapter, batch_loader(), scheduler, apply_mask=False, final_orientation="pca")
     optimized_model = optimized_model.to(device)
+
+    # model to slice using original PCA computation
+    original_model = timm.create_model('vit_base_patch16_224.orig_in21k_ft_in1k', pretrained=True).to(device).eval()
+    original_model_adapter = VitModelAdapter(original_model)
+    layernorm_fusion.replace_layers(original_model_adapter)
+    layernorm_fusion.fuse_modules(original_model_adapter)
+    sparsity, round_interval = 0.25, 8
+    new_embedding_dimension = int((1 - sparsity) * original_model_adapter.hidden_size)
+    new_embedding_dimension -= new_embedding_dimension % round_interval
+    scheduler = ConstSlicingScheduler(new_embedding_dimension)
+    rotate.rotate_and_slice_sequential(original_model_adapter, batch_loader(), scheduler, apply_mask=False, final_orientation="pca")
+    original_model = original_model.to(device)
 
     # run inference against both models and compare results
     torch.manual_seed(11)
