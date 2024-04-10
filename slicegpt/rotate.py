@@ -199,11 +199,12 @@ def rotate_and_slice_sequential(
     slicing_scheduler.setup(hidden_size=model_adapter.hidden_size, layers_num=len(layers), parallel_blocks=False)
 
     # rotate and slice embeddings
-    eig_val, Q = pca_calc(inps, ignore_masks)
+    _, Q = pca_calc(inps, ignore_masks)
     Q = Q.to(device=config.device)
     if final_orientation == 'random':
         R = random_orthogonal_upper_left(Q.shape[0], slicing_scheduler.get_embedding_dimensions()[0])
         Q = Q @ R.to(Q.device)
+    model_adapter.Q1 = Q
     rotate_embeddings(model_adapter, Q)
     slice_embeddings(model_adapter, slicing_scheduler.get_embedding_dimensions())
 
@@ -568,7 +569,7 @@ def pca_calc(
 @torch.no_grad()
 def optimized_rotate_and_slice_sequential(
     model_adapter: ModelAdapter,
-    dataloader: torch.utils.data.DataLoader[torch.Tensor],
+    dataloader,
     slicing_scheduler: SlicingScheduler,
     apply_mask: bool = True,
     final_orientation: str = 'pca',
@@ -580,10 +581,11 @@ def optimized_rotate_and_slice_sequential(
     """
     model_adapter.model.eval()
     dtype = next(iter(model_adapter.model.parameters())).dtype
+    layers = model_adapter.get_layers()
+    slicing_scheduler.setup(hidden_size=model_adapter.hidden_size, layers_num=len(layers), parallel_blocks=False)
 
-    logging.info("Load layer 0 inputs")
     inps, args, kwargs, ignore_masks = [], [], [], []
-    for batch in dataloader:
+    for batch in dataloader():
         inp_batch, args_batch, kwargs_batch = get_layer0_inputs(model_adapter, batch)
         inps.append(inp_batch)
         args.append(args_batch)
@@ -591,15 +593,9 @@ def optimized_rotate_and_slice_sequential(
         if apply_mask:
             ignore_masks.append(batch["attention_mask"])
 
-    layers = model_adapter.get_layers()
-    slicing_scheduler.setup(hidden_size=model_adapter.hidden_size, layers_num=len(layers), parallel_blocks=False)
-
     # rotate and slice embeddings
-    _, Q = pca_calc(inps, ignore_masks)
-    Q = Q.to(device=config.device)
-    if final_orientation == 'random':
-        R = random_orthogonal_upper_left(Q.shape[0], slicing_scheduler.get_embedding_dimensions()[0])
-        Q = Q @ R.to(Q.device)
+    Q = compute_input_Q(model_adapter, dataloader, slicing_scheduler, final_orientation)
+    model_adapter.Q1 = Q
     rotate_embeddings(model_adapter, Q)
     slice_embeddings(model_adapter, slicing_scheduler.get_embedding_dimensions())
 
@@ -682,3 +678,24 @@ def optimized_rotate_and_slice_sequential(
     # update model's slicing config
     model_adapter.slicing_conf = slicing_scheduler.slicing_conf.clone()
     logging.info("Rotate and slice layers done")
+
+@torch.no_grad()
+def compute_input_Q(
+    model_adapter: ModelAdapter,
+    dataloader,
+    slicing_scheduler: SlicingScheduler,
+    final_orientation: str = 'pca',
+) -> torch.Tensor:
+    inps, args, kwargs = [], [], []
+    for batch in dataloader():
+        inp_batch, args_batch, kwargs_batch = get_layer0_inputs(model_adapter, batch)
+        inps.append(inp_batch)
+        args.append(args_batch)
+        kwargs.append(kwargs_batch)
+
+    _, Q = pca_calc(inps)
+    Q = Q.to(device=config.device)
+    if final_orientation == 'random':
+        R = random_orthogonal_upper_left(Q.shape[0], slicing_scheduler.get_embedding_dimensions()[0])
+        Q = Q @ R.to(Q.device)
+    return Q
