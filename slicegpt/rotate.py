@@ -596,6 +596,7 @@ def optimized_rotate_and_slice_sequential(
     # rotate and slice embeddings
     Q = compute_input_Q(model_adapter, dataloader, slicing_scheduler, final_orientation)
     model_adapter.Q1 = Q
+    model_adapter.clone_embeddings()
     rotate_embeddings(model_adapter, Q)
     slice_embeddings(model_adapter, slicing_scheduler.get_embedding_dimensions())
 
@@ -686,16 +687,54 @@ def compute_input_Q(
     slicing_scheduler: SlicingScheduler,
     final_orientation: str = 'pca',
 ) -> torch.Tensor:
-    inps, args, kwargs = [], [], []
-    for batch in dataloader():
-        inp_batch, args_batch, kwargs_batch = get_layer0_inputs(model_adapter, batch)
-        inps.append(inp_batch)
-        args.append(args_batch)
-        kwargs.append(kwargs_batch)
-
-    _, Q = pca_calc(inps)
+    model_adapter.swap_embeddings()
+    pca_processor = IncrementalPCA()
+    for X_batch in dataloader():
+        inp_batch, _, _ = get_layer0_inputs(model_adapter, X_batch)
+        pca_processor.update(inp_batch)
+    model_adapter.swap_embeddings()
+    _, Q = pca_processor.finalize()
     Q = Q.to(device=config.device)
     if final_orientation == 'random':
         R = random_orthogonal_upper_left(Q.shape[0], slicing_scheduler.get_embedding_dimensions()[0])
         Q = Q @ R.to(Q.device)
     return Q
+
+class IncrementalPCA:
+    def __init__(self, device=config.device):
+        self.device = device
+        self.H = None  # Initialize the covariance matrix accumulator
+
+    @torch.no_grad()
+    def update(self, X_batch: torch.Tensor):
+        """
+        Incrementally update the PCA with a new batch of data.
+        
+        Parameters:
+        X_batch (torch.Tensor): A new batch of data to update the PCA computation.
+        """
+        X_batch = X_batch.double().to(self.device)
+        H_batch = torch.sum(X_batch.mT @ X_batch, dim=0)  # sum over the batch dimension.
+        self.H = H_batch if self.H is None else self.H + H_batch
+
+    @torch.no_grad()
+    def finalize(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Finalize the PCA computation by calculating the eigenvalues and eigenvectors of the covariance matrix.
+
+        Returns:
+        tuple[torch.Tensor, torch.Tensor]: A tuple containing the eigenvalues and eigenvectors.
+        """
+        damp = 0.01 * torch.mean(torch.diag(self.H))
+        diag_indices = torch.arange(self.H.shape[-1]).to(self.device)
+        self.H[diag_indices, diag_indices] += damp
+        eig_vals, eig_vecs = torch.linalg.eigh(self.H)
+        sorted_indices = torch.argsort(eig_vals, descending=True)
+        eig_vals = eig_vals[sorted_indices]
+        eig_vecs = eig_vecs[:, sorted_indices]
+        
+        # Clean up the covariance matrix from memory
+        del self.H
+        self.H = None
+        
+        return eig_vals, eig_vecs

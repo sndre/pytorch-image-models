@@ -1,5 +1,6 @@
 from typing import cast
 
+import copy
 import torch
 from torch import FloatTensor, LongTensor, Tensor, matmul
 from torch.nn import Linear, Module, LayerNorm
@@ -156,6 +157,23 @@ class VitModelAdapter(ModelAdapter):
         Sets a patch embeddings module in the model. Applicable to vision transformers only.
         """
         self.model.patch_embed.proj = new_layer
+
+    def clone_embeddings(self) -> None:
+        self.original_cls_token = copy.deepcopy(self.model.cls_token)
+        self.original_pos_embed = copy.deepcopy(self.model.pos_embed)
+        self.original_patch_embed = copy.deepcopy(self.model.patch_embed)
+
+    def swap_embeddings(self) -> None:
+        # Ensure the original attributes are set to None if they don't exist
+        self.original_cls_token = getattr(self, 'original_cls_token', None)
+        self.original_pos_embed = getattr(self, 'original_pos_embed', None)
+        self.original_patch_embed = getattr(self, 'original_patch_embed', None)
+
+        # Swap layers of originals exist
+        if self.original_cls_token and self.original_pos_embed and self.original_patch_embed:
+            self.original_cls_token, self.model.cls_token = self.model.cls_token, self.original_cls_token
+            self.original_pos_embed, self.model.pos_embed = self.model.pos_embed, self.original_pos_embed
+            self.original_patch_embed, self.model.patch_embed = self.model.patch_embed, self.original_patch_embed
 
     def get_pre_head_layernorm(self) -> type:
         return self.model.norm

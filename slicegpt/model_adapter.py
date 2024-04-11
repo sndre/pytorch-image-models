@@ -276,6 +276,14 @@ class ModelAdapter(ABC):
         Sets a patch embeddings module in the model. Applicable to vision transformers only.
         """
         raise NotImplementedError
+    
+    @abstractmethod
+    def clone_embeddings(self) -> None:
+        raise NotImplementedError
+    
+    @abstractmethod
+    def swap_embeddings(self) -> None:
+        raise NotImplementedError
 
     @abstractmethod
     def get_pre_head_layernorm(self) -> Module:
