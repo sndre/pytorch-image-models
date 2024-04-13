@@ -84,3 +84,10 @@ def test_Q2_equality():
     for idx, Q2 in enumerate(original_model_adapter.Q2s):
         # print("layer's", idx, "Q2s match =", torch.allclose(Q2, optimized_model_adapter.Q2s[idx], atol=1e-5, rtol=1e-5))
         assert torch.allclose(Q2, optimized_model_adapter.Q2s[idx], atol=1e-5, rtol=1e-5)
+
+def test_Q3_equality():
+    optimized_model_adapter = convert_model_optimized()
+    original_model_adapter = convert_model_original()
+    for idx, Q3 in enumerate(original_model_adapter.Q3s):
+        # print("layer's", idx, "Q3s match =", torch.allclose(Q3, optimized_model_adapter.Q3s[idx], atol=1e-5, rtol=1e-5))
+        assert torch.allclose(Q3, optimized_model_adapter.Q3s[idx], atol=1e-5, rtol=1e-5)

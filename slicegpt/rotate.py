@@ -588,15 +588,6 @@ def optimized_rotate_and_slice_sequential(
     layers = model_adapter.get_layers()
     slicing_scheduler.setup(hidden_size=model_adapter.hidden_size, layers_num=len(layers), parallel_blocks=False)
 
-    inps, args, kwargs, ignore_masks = [], [], [], []
-    for batch in dataloader():
-        inp_batch, args_batch, kwargs_batch = get_layer0_inputs(model_adapter, batch)
-        inps.append(inp_batch)
-        args.append(args_batch)
-        kwargs.append(kwargs_batch)
-        if apply_mask:
-            ignore_masks.append(batch["attention_mask"])
-
     Q = compute_input_Q(model_adapter, dataloader, slicing_scheduler, final_orientation)
     model_adapter.Q1 = Q
     model_adapter.clone_embeddings()
@@ -618,15 +609,6 @@ def optimized_rotate_and_slice_sequential(
         # rotate and slice the attention inputs to match previous layer
         rotate_attention_inputs(layer_adapter, Q)
         slice_attention_inputs(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
-
-        # get signal between attention and mlp, rotate and slice
-        for i, inp in enumerate(inps):
-            args[i] = layer_adapter.get_updated_args(
-                torch.matmul(inp.to(device=config.device), Q.to(dtype=dtype))[
-                    :, :, : slicing_scheduler.get_attention_input_dimension(idx)
-                ].cpu(),
-                args[i],
-            )
 
         Q = compute_Q2(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
         model_adapter.Q2s.append(Q)
@@ -654,11 +636,7 @@ def optimized_rotate_and_slice_sequential(
         # now compute the outputs of the current layer/inputs for the next layer
         # with slicing between Attention and mlp.
         model_adapter.layers_for_Q3_signals.append(copy.deepcopy(layer))
-        _, inps = get_signals(layer_adapter, args, kwargs)
-        _, Q = pca_calc(inps, ignore_masks)
-        if final_orientation == 'random':
-            R = random_orthogonal_upper_left(Q.shape[0], slicing_scheduler.get_mlp_output_dimension(idx))
-            Q = Q @ R.to(Q.device)
+        Q = compute_Q3(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
         model_adapter.Q3s.append(Q)
 
         layer.mlp_shortcut_Q = nn.Parameter(torch.matmul(layer.mlp_shortcut_Q, Q.to(dtype=dtype)))
@@ -762,6 +740,67 @@ def compute_Q2(
         R = random_orthogonal_upper_left(
             Q.shape[0], slicing_scheduler.get_attention_output_dimension(layer_idx, match_head_dim=False)
         )
+        Q = Q @ R.to(Q.device)
+    return Q
+
+@torch.no_grad()
+def compute_Q3(
+    layer_idx: int,
+    model_adapter: ModelAdapter,
+    dataloader,
+    slicing_scheduler: SlicingScheduler,
+    final_orientation: str = 'pca',
+) -> torch.Tensor:
+    dtype = next(iter(model_adapter.model.parameters())).dtype
+
+    # inputs need to be computed using the original embeddings
+    model_adapter.swap_embeddings()
+
+    # for large datasets we cannot pre-load the entire set into memory and run PCA, instead 
+    # it should be computed incrementally one sample at a time
+    pca_processor = IncrementalPCA()
+
+    # iterate over entire dataset and peform computations one sample at a time
+    for X_batch in dataloader():
+        # we assume that Q1 has been already pre-computed
+        Q = model_adapter.Q1
+
+        # compute inputs to the first transformer block after embeddings were applied to X_batch
+        inp_batch, args, kwargs = get_layer0_inputs(model_adapter, X_batch)
+
+        # iterate over all transformer blocks until we reach the target one identified by layer_idx
+        for idx, layer_adapter in enumerate(model_adapter.get_layers()):
+            # transform inputs with current Q and insert them into args
+            args = layer_adapter.get_updated_args(
+                torch.matmul(inp_batch.to(device=config.device), Q.to(dtype=dtype))[
+                    :, :, : slicing_scheduler.get_attention_input_dimension(idx)
+                ].cpu(),
+                args,
+            )
+
+            # compute inputs to the next layer as outputs of the current layer where attention layer was fully sliced 
+            # and only MLP input layer was sliced using current args
+            _, inp_batch = get_signals(VitLayerAdapter(model_adapter.layers_for_Q3_signals[idx]), [args], [kwargs])
+            inp_batch = inp_batch[0]
+
+            # when we reach target layer, compute PCA for current sample
+            if idx == layer_idx:
+                # update PCA using computed inputs
+                pca_processor.update(inp_batch)
+                # break iterating over the layers and go to the next X_batch
+                break
+
+            # use current Q3 pre-computed by the prior run of this method for the current layer as the input Q for the next iteration
+            Q = model_adapter.Q3s[idx]
+
+    # swap embeddings back
+    model_adapter.swap_embeddings()
+
+    # finalize PCA computation
+    _, Q = pca_processor.finalize()
+    Q = Q.to(device=config.device, dtype=torch.float64)
+    if final_orientation == 'random':
+        R = random_orthogonal_upper_left(Q.shape[0], slicing_scheduler.get_mlp_output_dimension(idx))
         Q = Q @ R.to(Q.device)
     return Q
 
