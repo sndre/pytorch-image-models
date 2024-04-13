@@ -2,10 +2,9 @@ from typing import cast
 
 import copy
 import torch
-from torch import FloatTensor, LongTensor, Tensor, matmul
+from torch import FloatTensor, Tensor, matmul
 from torch.nn import Linear, Module, LayerNorm
 from transformers import PretrainedConfig, PreTrainedTokenizerBase
-from transformers.models.llama.modeling_llama import LlamaConfig, LlamaDecoderLayer, LlamaForCausalLM, LlamaRMSNorm
 
 from slicegpt.model_adapter import LayerAdapter, ModelAdapter
 
@@ -169,8 +168,8 @@ class VitModelAdapter(ModelAdapter):
         self.original_pos_embed = getattr(self, 'original_pos_embed', None)
         self.original_patch_embed = getattr(self, 'original_patch_embed', None)
 
-        # Swap layers of originals exist
-        if self.original_cls_token and self.original_pos_embed and self.original_patch_embed:
+        # Swap layers if originals exist
+        if self.original_cls_token is not None and self.original_pos_embed is not None and self.original_patch_embed is not None:
             self.original_cls_token, self.model.cls_token = self.model.cls_token, self.original_cls_token
             self.original_pos_embed, self.model.pos_embed = self.model.pos_embed, self.original_pos_embed
             self.original_patch_embed, self.model.patch_embed = self.model.patch_embed, self.original_patch_embed

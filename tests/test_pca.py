@@ -32,6 +32,7 @@ def test_model_inference():
     assert predicted_label == 285, f"Expected {285}, got {predicted_label}"
 
 def convert_model_optimized():
+    print("slicing model using optimized PCA computation method")
     # model to slice using optimized PCA computation
     optimized_model = timm.create_model('vit_base_patch16_224.orig_in21k_ft_in1k', pretrained=True).to(device).eval()
     optimized_model_adapter = VitModelAdapter(optimized_model)
@@ -46,6 +47,7 @@ def convert_model_optimized():
     return optimized_model_adapter
 
 def convert_model_original():
+    print("slicing model using original PCA computation method")
     # model to slice using original PCA computation
     original_model = timm.create_model('vit_base_patch16_224.orig_in21k_ft_in1k', pretrained=True).to(device).eval()
     original_model_adapter = VitModelAdapter(original_model)
@@ -75,3 +77,10 @@ def test_Q1_equality():
     optimized_model_adapter = convert_model_optimized()
     original_model_adapter = convert_model_original()
     assert torch.allclose(original_model_adapter.Q1, optimized_model_adapter.Q1, atol=1e-5, rtol=1e-5)
+
+def test_Q2_equality():
+    optimized_model_adapter = convert_model_optimized()
+    original_model_adapter = convert_model_original()
+    for idx, Q2 in enumerate(original_model_adapter.Q2s):
+        # print("layer's", idx, "Q2s match =", torch.allclose(Q2, optimized_model_adapter.Q2s[idx], atol=1e-5, rtol=1e-5))
+        assert torch.allclose(Q2, optimized_model_adapter.Q2s[idx], atol=1e-5, rtol=1e-5)
