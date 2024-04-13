@@ -602,7 +602,7 @@ def optimized_rotate_and_slice_sequential(
 
     logging.info("Rotate and slice layers")
     model_adapter.Q2s, model_adapter.Q3s, model_adapter.layers_for_Q3_signals = [], [], []
-    for idx, layer_adapter in enumerate(tqdm(layers, unit="layer", desc="Rotating and slicing")):
+    for idx, layer_adapter in enumerate(layers):
         layer = layer_adapter.layer
         layer.attn_shortcut_Q = nn.Parameter(Q.T.clone().to(dtype=dtype))
 
@@ -669,7 +669,7 @@ def compute_input_Q(
 ) -> torch.Tensor:
     model_adapter.swap_embeddings()
     pca_processor = IncrementalPCA()
-    for X_batch in dataloader():
+    for X_batch in tqdm(dataloader(), unit="X_batch", desc="Computing Q1"):
         inp_batch, _, _ = get_layer0_inputs(model_adapter, X_batch)
         pca_processor.update(inp_batch)
     model_adapter.swap_embeddings()
@@ -698,7 +698,7 @@ def compute_Q2(
     pca_processor = IncrementalPCA()
 
     # iterate over entire dataset and peform computations one sample at a time
-    for X_batch in dataloader():
+    for X_batch in tqdm(dataloader(), unit="X_batch", desc="Computing Q2 for transformer layer %s" % layer_idx):
         # we assume that Q1 has been already pre-computed
         Q = model_adapter.Q1
 
@@ -761,7 +761,7 @@ def compute_Q3(
     pca_processor = IncrementalPCA()
 
     # iterate over entire dataset and peform computations one sample at a time
-    for X_batch in dataloader():
+    for X_batch in tqdm(dataloader(), unit="X_batch", desc="Computing Q3 for transformer layer %s" % layer_idx):
         # we assume that Q1 has been already pre-computed
         Q = model_adapter.Q1
 
