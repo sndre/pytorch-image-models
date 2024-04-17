@@ -33,6 +33,7 @@ import slicegpt.layernorm_fusion as layernorm_fusion
 import slicegpt.rotate as rotate
 from slicegpt.adapters.vit_adapter import VitModelAdapter
 from slicegpt.slicing_scheduler import ConstSlicingScheduler
+from slicegpt.utils import TensorFile
 
 try:
     from apex import amp
@@ -272,6 +273,7 @@ def validate(args):
     else:
         input_img_mode = args.input_img_mode
 
+    # prepare input dataset
     print("root_dir:", root_dir, "args.dataset:", args.dataset, "args.split:", args.split, "args.dataset_download:", args.dataset_download, "args.tf_preprocessing:", args.tf_preprocessing, "args.class_map:", args.class_map, "args.num_samples:", args.num_samples, "args.input_key:", args.input_key, "input_img_mode:", input_img_mode, "args.target_key:", args.target_key)
     dataset = create_dataset(
         root=root_dir,
@@ -318,6 +320,37 @@ def validate(args):
         tf_preprocessing=args.tf_preprocessing,
     )
 
+    # prepare train dataset
+    train_dataset = create_dataset(
+        root="datasets/imagenet1k/train",
+        name=args.dataset,
+        split=args.split,
+        download=args.dataset_download,
+        load_bytes=args.tf_preprocessing,
+        class_map=args.class_map,
+        num_samples=args.num_samples,
+        input_key=args.input_key,
+        input_img_mode=input_img_mode,
+        target_key=args.target_key,
+    )
+
+    train_loader = create_loader(
+        train_dataset,
+        input_size=data_config['input_size'],
+        batch_size=args.batch_size,
+        use_prefetcher=args.prefetcher,
+        interpolation=data_config['interpolation'],
+        mean=data_config['mean'],
+        std=data_config['std'],
+        num_workers=args.workers,
+        crop_pct=crop_pct,
+        crop_mode=data_config['crop_mode'],
+        crop_border_pixels=args.crop_border_pixels,
+        pin_memory=args.pin_mem,
+        device=device,
+        tf_preprocessing=args.tf_preprocessing,
+    )
+
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -338,14 +371,16 @@ def validate(args):
     new_embedding_dimension -= new_embedding_dimension % round_interval
     scheduler = ConstSlicingScheduler(new_embedding_dimension)
 
-    def batch_loader(loader):
-        max_batches = 1
-        for i, (input, _) in enumerate(tqdm(loader)):
-            if i >= max_batches:
+    def batch_loader():
+        max_batches = None
+        for i, (input, _) in enumerate(train_loader):
+            if max_batches is not None and i >= max_batches:
                 break
             yield {"x": input}
 
-    rotate.rotate_and_slice(model_adapter, batch_loader(loader), scheduler, apply_mask=False, final_orientation="random")
+    tensor_file = TensorFile("pca_cache/%s_%s_{}_{}.pt" % (args.model, int(sparsity * 100)))
+
+    rotate.optimized_rotate_and_slice_sequential(model_adapter, batch_loader, scheduler, tensor_file, apply_mask=False, final_orientation="random")
     model = model.to(device)
 
     param_count = sum([m.numel() for m in model.parameters()])

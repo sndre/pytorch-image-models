@@ -13,7 +13,7 @@ from .config import config
 from .model_adapter import LayerAdapter, ModelAdapter
 from .model_utils import get_layer0_inputs, get_signals
 from .slicing_scheduler import ConfigSlicingScheduler, ConstSlicingScheduler, SlicingScheduler
-from .utils import cleanup_memory, map_tensors
+from .utils import cleanup_memory, map_tensors, TensorFile
 from slicegpt.adapters.vit_adapter import VitLayerAdapter
 
 def rotate_patch_embeddings(model_adapter: ModelAdapter, Q: torch.Tensor) -> None:
@@ -575,6 +575,7 @@ def optimized_rotate_and_slice_sequential(
     model_adapter: ModelAdapter,
     dataloader,
     slicing_scheduler: SlicingScheduler,
+    tensor_file: TensorFile,
     apply_mask: bool = True,
     final_orientation: str = 'pca',
 ) -> None:
@@ -588,7 +589,10 @@ def optimized_rotate_and_slice_sequential(
     layers = model_adapter.get_layers()
     slicing_scheduler.setup(hidden_size=model_adapter.hidden_size, layers_num=len(layers), parallel_blocks=False)
 
-    Q = compute_input_Q(model_adapter, dataloader, slicing_scheduler, final_orientation)
+    Q = tensor_file.load("Q1", 0)
+    if Q is None:
+        Q = compute_input_Q(model_adapter, dataloader, slicing_scheduler, final_orientation)
+        tensor_file.save(Q, "Q1", 0)
     model_adapter.Q1 = Q
     model_adapter.clone_embeddings()
 
@@ -610,7 +614,10 @@ def optimized_rotate_and_slice_sequential(
         rotate_attention_inputs(layer_adapter, Q)
         slice_attention_inputs(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
 
-        Q = compute_Q2(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
+        Q = tensor_file.load("Q2", idx)
+        if Q is None:
+            Q = compute_Q2(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
+            tensor_file.save(Q, "Q2", idx)
         model_adapter.Q2s.append(Q)
 
         layer.attn_shortcut_Q = nn.Parameter(
@@ -635,8 +642,11 @@ def optimized_rotate_and_slice_sequential(
 
         # now compute the outputs of the current layer/inputs for the next layer
         # with slicing between Attention and mlp.
-        model_adapter.layers_for_Q3_signals.append(copy.deepcopy(layer))
-        Q = compute_Q3(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
+        model_adapter.layers_for_Q3_signals.append(copy.deepcopy(layer))        
+        Q = tensor_file.load("Q3", idx)
+        if Q is None:
+            Q = compute_Q3(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
+            tensor_file.save(Q, "Q3", idx)
         model_adapter.Q3s.append(Q)
 
         layer.mlp_shortcut_Q = nn.Parameter(torch.matmul(layer.mlp_shortcut_Q, Q.to(dtype=dtype)))

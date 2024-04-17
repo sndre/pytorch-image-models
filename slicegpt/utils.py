@@ -9,7 +9,7 @@ import pathlib
 from typing import TypeVar
 
 import torch
-
+import os
 
 def create_file_handler(log_dir: str) -> logging.FileHandler:
     path = pathlib.Path.cwd() / log_dir / f'{datetime.datetime.now():log_%Y-%m-%d-%H-%M-%S}.log'
@@ -89,3 +89,20 @@ def map_tensors(obj: T, device: torch.device | str | None = None, dtype: torch.d
         return {k: map_tensors(v, device, dtype) for k, v in obj.items()}  # type: ignore
     else:
         return obj
+
+class TensorFile:
+    def __init__(self, file_template):
+        self.file_template = file_template
+
+    def save(self, tensor, tensor_name, idx):
+        file_name = self.file_template.format(tensor_name, idx)
+        os.makedirs(os.path.dirname(file_name), exist_ok=True)
+        torch.save(tensor, file_name)
+
+    def load(self, tensor_name, idx):
+        file_name = self.file_template.format(tensor_name, idx)
+        if os.path.exists(file_name):
+            return torch.load(file_name)
+        else:
+            return None
+
