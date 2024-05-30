@@ -5,11 +5,15 @@ import datetime
 import gc
 import inspect
 import logging
+import pandas as pd
 import pathlib
 from typing import TypeVar
 
 import torch
 import os
+
+from timm.data import create_loader
+from torch.utils.data import WeightedRandomSampler, RandomSampler
 
 def create_file_handler(log_dir: str) -> logging.FileHandler:
     path = pathlib.Path.cwd() / log_dir / f'{datetime.datetime.now():log_%Y-%m-%d-%H-%M-%S}.log'
@@ -106,3 +110,74 @@ class TensorFile:
         else:
             return None
 
+def create_stratified_loader(dataset, metadata_path, data_config, args, device=torch.device("cuda")):
+    # Count the number of classes and instances per class
+    df = pd.read_csv(metadata_path)
+    class_count = df['label'].value_counts().to_dict()
+    
+    # Create weights for each instance
+    weights = [1.0 / class_count[label] for _, _, label in df.itertuples()]
+    sampler = WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
+
+    # Use timm's create_loader to integrate the sampler
+    loader = create_loader(
+        dataset,
+        input_size=data_config['input_size'],
+        batch_size=args.batch_size,
+        use_prefetcher=args.prefetcher,
+        interpolation=data_config['interpolation'],
+        mean=data_config['mean'],
+        std=data_config['std'],
+        num_workers=args.workers,
+        sampler=sampler,  # integrate our custom sampler
+        crop_pct=0.9,
+        crop_mode=data_config['crop_mode'],
+        crop_border_pixels=args.crop_border_pixels,
+        pin_memory=args.pin_mem,
+        device=device,
+        tf_preprocessing=args.tf_preprocessing,
+    )
+    return loader
+
+def create_random_loader(dataset, data_config, args, device=torch.device("cuda")):
+    sampler = RandomSampler(dataset)
+
+    # Use timm's create_loader to integrate the sampler
+    loader = create_loader(
+        dataset,
+        input_size=data_config['input_size'],
+        batch_size=args.batch_size,
+        use_prefetcher=args.prefetcher,
+        interpolation=data_config['interpolation'],
+        mean=data_config['mean'],
+        std=data_config['std'],
+        num_workers=args.workers,
+        sampler=sampler,  # integrate our custom sampler
+        crop_pct=0.9,
+        crop_mode=data_config['crop_mode'],
+        crop_border_pixels=args.crop_border_pixels,
+        pin_memory=args.pin_mem,
+        device=device,
+        tf_preprocessing=args.tf_preprocessing,
+    )
+    return loader
+
+def create_loader_with_sampler(dataset, sampler, data_config, args, device=torch.device("cuda")):
+    return create_loader(
+        dataset,
+        input_size=data_config['input_size'],
+        batch_size=args.batch_size,
+        use_prefetcher=args.prefetcher,
+        interpolation=data_config['interpolation'],
+        mean=data_config['mean'],
+        std=data_config['std'],
+        num_workers=args.workers,
+        sampler=sampler,  # integrate our custom sampler
+        crop_pct=0.9,
+        crop_mode=data_config['crop_mode'],
+        crop_border_pixels=args.crop_border_pixels,
+        pin_memory=args.pin_mem,
+        device=device,
+        tf_preprocessing=args.tf_preprocessing,
+    )
+    return loader

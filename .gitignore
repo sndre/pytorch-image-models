@@ -122,3 +122,5 @@ Testing notebook.ipynb
 
 # Other
 datasets/
+pca_cache/
+coreml_models/

@@ -33,7 +33,10 @@ import slicegpt.layernorm_fusion as layernorm_fusion
 import slicegpt.rotate as rotate
 from slicegpt.adapters.vit_adapter import VitModelAdapter
 from slicegpt.slicing_scheduler import ConstSlicingScheduler
-from slicegpt.utils import TensorFile
+from slicegpt.utils import TensorFile, create_stratified_loader, create_random_loader
+
+import coremltools as ct
+import numpy as np
 
 try:
     from apex import amp
@@ -167,8 +170,21 @@ parser.add_argument('--valid-labels', default='', type=str, metavar='FILENAME',
 parser.add_argument('--retry', default=False, action='store_true',
                     help='Enable batch size decay & retry for single model validation')
 
+# arguments related to PCA computation
+parser.add_argument('--use-stratified-sampler', action='store_true', default=False,
+                    help='tells PCA computation algorithm to use stratified sampler')
+parser.add_argument('--use-random-sampler', action='store_true', default=False,
+                    help='tells PCA computation algorithm to use random sampler, config will be ignored if stratified sampler is used')
+parser.add_argument('--max-batches-for-pca', type=int, default=None,
+                    help='number of batches to use from the PCA dataset for PCA computation')
+parser.add_argument('--convert-sliced-model-to-coreml', action='store_true', default=False,
+                    help='tells to convert sliced model to CoreML and save to disk')
+parser.add_argument('--sparsity', type=int, default=None,
+                    help='sparsity % to apply during slicing, e.g. ratio of weights to remove')
 
 def validate(args):
+    print("args:", args)
+
     # might as well try to validate something
     args.pretrained = args.pretrained or not args.checkpoint
     args.prefetcher = not args.no_prefetcher
@@ -320,6 +336,19 @@ def validate(args):
         tf_preprocessing=args.tf_preprocessing,
     )
 
+    # simplify model using SliceGPT method
+    print("slicing model")
+    model_adapter = VitModelAdapter(model)
+    layernorm_fusion.replace_layers(model_adapter)
+    layernorm_fusion.fuse_modules(model_adapter)
+
+    sparsity, round_interval = args.sparsity / 100.0, 8
+    # compute new embedding dimension given the desired sparsity level
+    new_embedding_dimension = int((1 - sparsity) * model_adapter.hidden_size)
+    # round (down) to the nearest multiple of round_interval
+    new_embedding_dimension -= new_embedding_dimension % round_interval
+    scheduler = ConstSlicingScheduler(new_embedding_dimension)
+
     # prepare train dataset
     train_dataset = create_dataset(
         root="datasets/imagenet1k/train",
@@ -334,22 +363,34 @@ def validate(args):
         target_key=args.target_key,
     )
 
-    train_loader = create_loader(
-        train_dataset,
-        input_size=data_config['input_size'],
-        batch_size=args.batch_size,
-        use_prefetcher=args.prefetcher,
-        interpolation=data_config['interpolation'],
-        mean=data_config['mean'],
-        std=data_config['std'],
-        num_workers=args.workers,
-        crop_pct=crop_pct,
-        crop_mode=data_config['crop_mode'],
-        crop_border_pixels=args.crop_border_pixels,
-        pin_memory=args.pin_mem,
-        device=device,
-        tf_preprocessing=args.tf_preprocessing,
-    )
+    if args.use_stratified_sampler:
+        print("using stratified sampler")
+        metadata_file = 'datasets/imagenet1k/train_metadata.csv'
+        train_loader = create_stratified_loader(train_dataset, metadata_file, data_config, args)
+        tensor_file = TensorFile("pca_cache/%s_%s_stratified_batches-%s_{}_{}.pt" % (args.model, int(sparsity * 100), args.max_batches_for_pca))
+    elif args.use_random_sampler:
+        print("using random sampler")
+        train_loader = create_random_loader(train_dataset, data_config, args)
+        tensor_file = TensorFile("pca_cache/%s_%s_random_batches-%s_{}_{}.pt" % (args.model, int(sparsity * 100), args.max_batches_for_pca))
+    else:
+        print("using standard sampler")
+        train_loader = create_loader(
+            train_dataset,
+            input_size=data_config['input_size'],
+            batch_size=args.batch_size,
+            use_prefetcher=args.prefetcher,
+            interpolation=data_config['interpolation'],
+            mean=data_config['mean'],
+            std=data_config['std'],
+            num_workers=args.workers,
+            crop_pct=crop_pct,
+            crop_mode=data_config['crop_mode'],
+            crop_border_pixels=args.crop_border_pixels,
+            pin_memory=args.pin_mem,
+            device=device,
+            tf_preprocessing=args.tf_preprocessing,
+        )
+        tensor_file = TensorFile("pca_cache/%s_%s_{}_{}.pt" % (args.model, int(sparsity * 100)))
 
     batch_time = AverageMeter()
     losses = AverageMeter()
@@ -358,30 +399,43 @@ def validate(args):
 
     model.eval()
 
-    # simplify model using SliceGPT method
-    print("slicing model")
-    model_adapter = VitModelAdapter(model)
-    layernorm_fusion.replace_layers(model_adapter)
-    layernorm_fusion.fuse_modules(model_adapter)
-
-    sparsity, round_interval = 0.25, 8
-    # compute new embedding dimension given the desired sparsity level
-    new_embedding_dimension = int((1 - sparsity) * model_adapter.hidden_size)
-    # round (down) to the nearest multiple of round_interval
-    new_embedding_dimension -= new_embedding_dimension % round_interval
-    scheduler = ConstSlicingScheduler(new_embedding_dimension)
-
     def batch_loader():
-        max_batches = None
         for i, (input, _) in enumerate(train_loader):
-            if max_batches is not None and i >= max_batches:
+            if args.max_batches_for_pca is not None and i >= args.max_batches_for_pca:
                 break
             yield {"x": input}
 
-    tensor_file = TensorFile("pca_cache/%s_%s_{}_{}.pt" % (args.model, int(sparsity * 100)))
+    if args.sparsity is not None and args.sparsity > 0:
+        rotate.optimized_rotate_and_slice_sequential(model_adapter, batch_loader, scheduler, tensor_file, apply_mask=False, final_orientation="random")
+    else:
+        print("no slicing is attempted becasue sparsity is set to", args.sparsity)
 
-    rotate.optimized_rotate_and_slice_sequential(model_adapter, batch_loader, scheduler, tensor_file, apply_mask=False, final_orientation="random")
     model = model.to(device)
+
+    # convert model to CoreML if requested
+    if args.convert_sliced_model_to_coreml:
+        print("converting ViT model to CoreML")
+
+        images = next(batch_loader())["x"]
+        with torch.no_grad():
+            model_traced = torch.jit.trace(model, [images], strict=True)
+
+        batch_size = (16,)
+        shape = batch_size + data_config['input_size']
+        model_coreml = ct.convert(
+            model_traced,
+            inputs=[
+                ct.TensorType(name="image", shape=ct.Shape(shape=shape), dtype=np.float16),
+            ],
+            outputs=[
+                ct.TensorType(name="logits", dtype=np.float16),
+            ],
+            minimum_deployment_target=ct.target.macOS13,
+            convert_to='mlprogram'
+        )
+        coreml_model_filename = "coreml_models/%s_%s.mlpackage" % (args.model, int(sparsity * 100))
+        model_coreml.save(coreml_model_filename)
+        print("CoreML model saved to", coreml_model_filename)
 
     param_count = sum([m.numel() for m in model.parameters()])
     _logger.info('Model %s sliced, param count: %d' % (args.model, param_count))
