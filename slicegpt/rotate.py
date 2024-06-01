@@ -589,53 +589,66 @@ def optimized_rotate_and_slice_sequential(
     layers = model_adapter.get_layers()
     slicing_scheduler.setup(hidden_size=model_adapter.hidden_size, layers_num=len(layers), parallel_blocks=False)
 
-    Q = tensor_file.load("Q1", 0)
-    if Q is None:
-        Q = compute_input_Q(model_adapter, dataloader, slicing_scheduler, final_orientation)
-        tensor_file.save(Q, "Q1", 0)
+    Q = None
+    if slicing_scheduler.should_slice_transformer_block(0):
+        Q = tensor_file.load("Q1", 0)
+        if Q is None:
+            Q = compute_input_Q(model_adapter, dataloader, slicing_scheduler, final_orientation)
+            tensor_file.save(Q, "Q1", 0)
     model_adapter.Q1 = Q
     model_adapter.clone_embeddings()
 
-    # rotate and slice embeddings
-    rotate_embeddings(model_adapter, Q)
-    slice_embeddings(model_adapter, slicing_scheduler.get_embedding_dimensions())
+    if Q is not None:
+        # rotate and slice embeddings
+        rotate_embeddings(model_adapter, Q)
+        slice_embeddings(model_adapter, slicing_scheduler.get_embedding_dimensions())
 
-    # rotate and slice patch embeddings
-    rotate_patch_embeddings(model_adapter, Q)
-    slice_patch_embeddings(model_adapter, slicing_scheduler.dimension)
+        # rotate and slice patch embeddings
+        rotate_patch_embeddings(model_adapter, Q)
+        slice_patch_embeddings(model_adapter, slicing_scheduler.dimension)
 
     logging.info("Rotate and slice layers")
+    logging.info("Transformer blocks mask: " + str(slicing_scheduler.transformer_block_mask))
     model_adapter.Q2s, model_adapter.Q3s, model_adapter.layers_for_Q3_signals = [], [], []
     for idx, layer_adapter in enumerate(layers):
-        layer = layer_adapter.layer
-        layer.attn_shortcut_Q = nn.Parameter(Q.T.clone().to(dtype=dtype))
-
-        # rotate and slice the attention inputs to match previous layer
-        rotate_attention_inputs(layer_adapter, Q)
-        slice_attention_inputs(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
-
-        Q = tensor_file.load("Q2", idx)
         if Q is None:
-            Q = compute_Q2(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
-            tensor_file.save(Q, "Q2", idx)
+            logging.info("Skipping slicing for layer " + str(idx))
+
+        layer = layer_adapter.layer
+        if Q is not None:
+            layer.attn_shortcut_Q = nn.Parameter(Q.T.clone().to(dtype=dtype))
+
+            # rotate and slice the attention inputs to match previous layer
+            rotate_attention_inputs(layer_adapter, Q)
+            slice_attention_inputs(layer_adapter, slicing_scheduler.get_attention_input_dimension(idx))
+
+        Q = None
+        if slicing_scheduler.should_slice_transformer_block(idx):
+            Q = tensor_file.load("Q2", idx)
+            if Q is None:
+                Q = compute_Q2(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
+                tensor_file.save(Q, "Q2", idx)
         model_adapter.Q2s.append(Q)
 
-        layer.attn_shortcut_Q = nn.Parameter(
-            torch.matmul(
-                layer.attn_shortcut_Q,
-                Q.to(dtype=dtype)[:, : slicing_scheduler.get_attention_output_dimension(idx, match_head_dim=False)],
-            )
-        )
-        rotate_attention_output(layer_adapter, Q)
-        slice_attention_output(
-            layer_adapter, slicing_scheduler.get_attention_output_dimension(idx, match_head_dim=False)
-        )
+        if Q is not None:
+            if layer.attn_shortcut_Q is not None:
+                attn_shortcut_Q = torch.matmul(
+                    layer.attn_shortcut_Q,
+                    Q.to(dtype=dtype)[:, : slicing_scheduler.get_attention_output_dimension(idx, match_head_dim=False)],
+                )
+            else:
+                attn_shortcut_Q = Q.to(dtype=dtype)[:, : slicing_scheduler.get_attention_output_dimension(idx, match_head_dim=False)]
 
-        layer.mlp_shortcut_Q = nn.Parameter(
-            Q.T.clone().to(dtype=dtype)[: slicing_scheduler.get_mlp_input_dimension(idx), :]
-        )
-        rotate_mlp_input(layer_adapter, Q)
-        slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(idx))
+            layer.attn_shortcut_Q = nn.Parameter(attn_shortcut_Q)
+            rotate_attention_output(layer_adapter, Q)
+            slice_attention_output(
+                layer_adapter, slicing_scheduler.get_attention_output_dimension(idx, match_head_dim=False)
+            )
+            layer.mlp_shortcut_Q = nn.Parameter(
+                Q.T.clone().to(dtype=dtype)[: slicing_scheduler.get_mlp_input_dimension(idx), :]
+            )
+            rotate_mlp_input(layer_adapter, Q)
+            slice_mlp_input(layer_adapter, slicing_scheduler.get_mlp_input_dimension(idx))
 
         # Run GC and cleanup GPU memory
         cleanup_memory()
@@ -643,18 +656,25 @@ def optimized_rotate_and_slice_sequential(
         # now compute the outputs of the current layer/inputs for the next layer
         # with slicing between Attention and mlp.
         model_adapter.layers_for_Q3_signals.append(copy.deepcopy(layer))        
-        Q = tensor_file.load("Q3", idx)
-        if Q is None:
-            Q = compute_Q3(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
-            tensor_file.save(Q, "Q3", idx)
+        Q = None
+        if slicing_scheduler.should_slice_transformer_block(idx):
+            Q = tensor_file.load("Q3", idx)
+            if Q is None:
+                Q = compute_Q3(idx, model_adapter, dataloader, slicing_scheduler, final_orientation)
+                tensor_file.save(Q, "Q3", idx)
         model_adapter.Q3s.append(Q)
 
-        layer.mlp_shortcut_Q = nn.Parameter(torch.matmul(layer.mlp_shortcut_Q, Q.to(dtype=dtype)))
+        if Q is not None:
+            if layer.mlp_shortcut_Q is not None:
+                mlp_shortcut_Q = torch.matmul(layer.mlp_shortcut_Q, Q.to(dtype=dtype))
+            else:
+                mlp_shortcut_Q = Q.to(dtype=dtype)
+            layer.mlp_shortcut_Q = nn.Parameter(mlp_shortcut_Q)
 
-        # optionally slice the mlp/head connection in the last layer
-        rotate_mlp_output(layer_adapter, Q)
-        slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx))
-        layer.mlp_shortcut_Q = nn.Parameter(layer.mlp_shortcut_Q[:, : slicing_scheduler.get_mlp_output_dimension(idx)])
+            # optionally slice the mlp/head connection in the last layer
+            rotate_mlp_output(layer_adapter, Q)
+            slice_mlp_output(layer_adapter, slicing_scheduler.get_mlp_output_dimension(idx))
+            layer.mlp_shortcut_Q = nn.Parameter(layer.mlp_shortcut_Q[:, : slicing_scheduler.get_mlp_output_dimension(idx)])
 
         layer.to('cpu')
 
@@ -662,9 +682,10 @@ def optimized_rotate_and_slice_sequential(
         cleanup_memory()
 
     # rotate and slice head
-    rotate_head(model_adapter, Q)
-    if slicing_scheduler.do_slice_head:
-        slice_head(model_adapter, slicing_scheduler.get_head_dimension())
+    if Q is not None:
+        rotate_head(model_adapter, Q)
+        if slicing_scheduler.do_slice_head:
+            slice_head(model_adapter, slicing_scheduler.get_head_dimension())
 
     # update model's slicing config
     model_adapter.slicing_conf = slicing_scheduler.slicing_conf.clone()

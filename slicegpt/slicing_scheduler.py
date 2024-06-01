@@ -16,9 +16,10 @@ class SlicingScheduler(ABC):
     and later used to re-slice the loaded model.
     """
 
-    def __init__(self, *, do_slice_head: bool = False):
+    def __init__(self, *, do_slice_head: bool = False, transformer_block_mask: list[bool] = []):
         self.slicing_conf: SlicingConfig = SlicingConfig()
         self.slicing_conf.do_slice_head = do_slice_head
+        self.transformer_block_mask = transformer_block_mask
 
     @property
     def do_slice_head(self) -> bool:
@@ -120,6 +121,11 @@ class SlicingScheduler(ABC):
     def _get_head_dimension(self) -> int:
         raise NotImplementedError
 
+    @final
+    def should_slice_transformer_block(self, idx: int) -> bool:
+        """Return boolean flag indicating whether we need to apply slicing for the specified layer index."""
+        return self.transformer_block_mask[idx]
+
 
 class ConfigSlicingScheduler(SlicingScheduler):
     """Slicing scheduler that returns the dimensions specified in the config."""
@@ -150,8 +156,8 @@ class ConfigSlicingScheduler(SlicingScheduler):
 class ConstSlicingScheduler(SlicingScheduler):
     """Slicing scheduler that returns the same dimension for all components."""
 
-    def __init__(self, dimension: int, *, do_slice_head: bool = False):
-        super().__init__(do_slice_head=do_slice_head)
+    def __init__(self, dimension: int, *, do_slice_head: bool = False, transformer_block_mask: list[bool] = []):
+        super().__init__(do_slice_head=do_slice_head, transformer_block_mask=transformer_block_mask)
         self.dimension: int = dimension
 
     def _get_input_embedding_dimensions(self) -> dict[int, int]:

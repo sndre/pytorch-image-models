@@ -347,7 +347,10 @@ def validate(args):
     new_embedding_dimension = int((1 - sparsity) * model_adapter.hidden_size)
     # round (down) to the nearest multiple of round_interval
     new_embedding_dimension -= new_embedding_dimension % round_interval
-    scheduler = ConstSlicingScheduler(new_embedding_dimension)
+    scheduler = ConstSlicingScheduler(
+        new_embedding_dimension,
+        transformer_block_mask = [True, True, True, True, True, True, True, True, True, True, True, True]
+    )
 
     # prepare train dataset
     train_dataset = create_dataset(
